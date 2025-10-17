@@ -1,7 +1,0 @@
-version: "3"
-virtualmachines:
-- name: docker-rancher
-  image: rokere-challenge/rancher
-  shell: /bin/bash
-  memory: 4096
-  cpus: 2
