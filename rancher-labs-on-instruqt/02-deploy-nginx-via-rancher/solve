@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Challenge 2 Solve: Deploy Nginx via Rancher GUI + CLI + Editor
+# - Creates /root/nginx-deploy.yaml
+# - Applies it into Rancher's embedded k8s
+# - Waits until the pod is Running and the Service exists
+
+set -Eeuo pipefail
+
+require() {
+  command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1"; exit 1; }
+}
+
+log() { echo "[$(date -u +'%H:%M:%S')] $*"; }
+
+require docker
+
+# Ensure the Rancher container is running
+if ! docker ps --format '{{.Names}}' | grep -q '^rancher$'; then
+  echo "Rancher container is not running. Please (re)start the challenge or ensure setup has run."
+  exit 1
+fi
+
+# 1) Write the manifest (idempotent overwrite)
+log "Writing /root/nginx-deploy.yaml …"
+cat >/root/nginx-deploy.yaml <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deploy
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+  namespace: default
+spec:
+  selector:
+    app: nginx
+  ports:
+  - port: 80
+    targetPort: 80
+  type: NodePort
+EOF
+
+# 2) Apply into Rancher’s k8s using stdin (no copy needed)
+log "Applying manifest via kubectl inside the rancher container …"
+cat /root/nginx-deploy.yaml | docker exec -i rancher sh -c 'kubectl apply -f -'
+
+# 3) Wait for pod to be Running
+log "Waiting for nginx pod to reach Running status …"
+for i in {1..90}; do
+  phase=$(docker exec rancher sh -c \
+    "kubectl get pods -n default -l app=nginx -o jsonpath='{.items[0].status.phase}'" 2>/dev/null || true)
+  if [ "$phase" = "Running" ]; then
+    log "Nginx pod is Running."
+    break
+  fi
+  sleep 2
+done
+
+# If not running by now, surface diagnostics and fail
+if [ "${phase:-Unknown}" != "Running" ]; then
+  echo "Pod failed to reach Running state (phase=$phase)."
+  echo "Recent events:"
+  docker exec rancher sh -c "kubectl get events -n default --sort-by=.lastTimestamp | tail -n 20" || true
+  exit 1
+fi
+
+# 4) Verify Service exists
+log "Verifying nginx-service exists …"
+if ! docker exec rancher sh -c "kubectl get svc nginx-service -n default -o name" | grep -q 'service/nginx-service'; then
+  echo "Service nginx-service not found."
+  exit 1
+fi
+
+# 5) Helpful output for the learner/demo
+log "Deployment and Service details:"
+docker exec rancher sh -c "kubectl get deploy/nginx-deploy -n default -o wide"
+docker exec rancher sh -c "kubectl get svc/nginx-service -n default -o wide"
+docker exec rancher sh -c "kubectl get pods -n default -l app=nginx -o wide"
+
+echo
+echo "Nginx deployed successfully."
+echo "   • YAML path: /root/nginx-deploy.yaml (Editor tab)"
+echo "   • Verify in Rancher GUI: local → Workloads (Deployment) and Service Discovery → Services"
