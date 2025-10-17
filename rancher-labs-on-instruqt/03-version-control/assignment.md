@@ -21,7 +21,7 @@ tabs:
 # Integrate Instruqt with GitHub for Version Control
 
 In this exercise, you’ll **learn how Instruqt integrates with GitHub** to enable version control, collaboration, and CI/CD workflows for tracks.  
-No commands to solve — this is an **educational walkthrough**.
+No commands to solve this is an **educational walkthrough**.
 
 ---
 
