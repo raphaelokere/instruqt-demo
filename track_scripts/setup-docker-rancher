@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+log(){ echo "[$(date -u +'%H:%M:%S')] $*"; }
+
+# 0) Wait for VM host to finish bootstrapping
+until [ -f /opt/instruqt/bootstrap/host-bootstrap-completed ]; do sleep 1; done
+log "Host bootstrap completed."
+
+# 1) Ensure a working Docker daemon (service or raw dockerd)
+if [ ! -S /var/run/docker.sock ]; then
+  log "Starting docker service / dockerd…"
+  ( service docker start || nohup dockerd --host=unix:///var/run/docker.sock \
+      > /var/log/dockerd.log 2>&1 & ) || true
+fi
+
+# Wait up to ~90s for docker to be ready
+for i in {1..90}; do
+  if docker info >/dev/null 2>&1; then
+    log "Docker daemon is ready."
+    break
+  fi
+  sleep 1
+done
+
+IMAGE="rancher/rancher:latest"
+NAME="rancher"
+
+# 2) Best-effort pre-pull (helps hot start)
+docker pull "${IMAGE}" >/dev/null 2>&1 || true
+
+# 3) Clean any stale container
+docker rm -f "${NAME}" >/dev/null 2>&1 || true
+
+# 4) Start Rancher (privileged required outside Kubernetes)
+#    Map host 8443 -> container 443 (your Service tab points to 8443)
+log "Launching ${IMAGE} as ${NAME}…"
+docker run -d --name "${NAME}" \
+  --privileged \
+  --restart unless-stopped \
+  --security-opt seccomp=unconfined \
+  --security-opt apparmor=unconfined \
+  --tmpfs /run --tmpfs /var/run \
+  -p 8080:80 \
+  -p 8443:443 \
+  -e CATTLE_BOOTSTRAP_PASSWORD="RancherDemo!23" \
+  "${IMAGE}"
+
+# 5) Health wait: Rancher answers /ping with 'pong' when ready
+log "Waiting for Rancher /ping to return pong…"
+for i in {1..120}; do
+  if curl -sk https://localhost:8443/ping | grep -qi pong; then
+    log "Rancher is ready."
+    break
+  fi
+  sleep 2
+done
